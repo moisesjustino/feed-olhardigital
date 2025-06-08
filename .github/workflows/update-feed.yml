@@ -30,6 +30,6 @@ jobs:
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "BEEP BOOP: Feed RSS atualizado automaticamente"
-          file_pattern: feed_tecnoblog.xml
+          file_pattern: feed_olhardigital.xml
           commit_user_name: GitHub Actions Bot
           commit_user_email: actions@github.com
