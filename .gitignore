@@ -1,0 +1,9 @@
+﻿# Ambiente Virtual
+venv/
+
+# Cache do Python
+__pycache__/
+*.pyc
+
+# Arquivos locais de teste (opcional, mas bom)
+pagina_alvo.html
