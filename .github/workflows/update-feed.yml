@@ -23,7 +23,7 @@ jobs:
           pip install -r requirements.txt
 
       - name: Gerar o feed
-        run: python scraper_v11.py
+        run: python scraper.py
 
       # PASSO FINAL E CORRIGIDO
       - name: Commit e Push do feed gerado
