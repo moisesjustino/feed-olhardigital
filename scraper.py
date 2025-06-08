@@ -1,5 +1,5 @@
-﻿# scraper_v11.py (Corrigindo ordem do RSS - versão definitiva)
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
+# scraper.py (versão corrigida para GitHub Actions)
 
 import undetected_chromedriver as uc
 from bs4 import BeautifulSoup
@@ -9,6 +9,11 @@ import datetime
 import time
 import pytz
 import re
+
+# Importações adicionais para a espera inteligente do Selenium
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
 
 # --- CONFIGURAÇÕES ---
 URL_ALVO = 'https://olhardigital.com.br/editorias/noticias/'
@@ -25,7 +30,7 @@ SELETOR_RESUMO_HOME = 'div.p-description'
 SELETOR_IMAGEM_HOME = 'div.p-img img'
 
 # --- SELETOR DA PÁGINA INTERNA ---
-SELETOR_DATA_INTERNA = 'span.sng-data' 
+SELETOR_DATA_INTERNA = 'span.sng-data'
 # --- FIM DAS CONFIGURAÇÕES ---
 
 def gerar_feed_completo():
@@ -36,25 +41,50 @@ def gerar_feed_completo():
 
     try:
         # --- ETAPA 1: Coletar informações básicas da página principal ---
-        print("Configurando o navegador indetectável...")
+        print("Configurando o navegador indetectável para o ambiente da Action...")
         options = uc.ChromeOptions()
-        # options.add_argument('--headless')
+        
+        # Ativa o modo headless e adiciona opções para estabilidade e disfarce
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+        options.add_argument('--disable-dev-shm-usage')
+        options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36')
+        options.add_argument("--window-size=1920,1080")
+
         driver = uc.Chrome(options=options, use_subprocess=True)
 
         print(f"Acessando página principal: {URL_ALVO}")
         driver.get(URL_ALVO)
-        print("Aguardando 10 segundos para carregamento completo...")
-        time.sleep(10)
+
+        # Espera de forma inteligente até que o container dos artigos esteja visível (máximo 30 segundos)
+        print("Aguardando o container de artigos carregar...")
+        wait = WebDriverWait(driver, 30) 
+        wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, SELETOR_CONTAINER_ARTIGOS)))
+        print("Container de artigos carregado com sucesso!")
+        
+        # Um pequeno sleep extra pode ajudar com elementos que carregam após o container
+        time.sleep(3)
 
         html_principal = driver.page_source
         soup_principal = BeautifulSoup(html_principal, 'lxml')
         
         container_artigos = soup_principal.select_one(SELETOR_CONTAINER_ARTIGOS)
         if not container_artigos:
-            raise Exception(f"Container principal de artigos não encontrado: '{SELETOR_CONTAINER_ARTIGOS}'")
+            with open('debug_page_error.html', 'w', encoding='utf-8') as f:
+                f.write(driver.page_source)
+            raise Exception(f"Container principal de artigos não encontrado: '{SELETOR_CONTAINER_ARTIGOS}'. Página salva em debug_page_error.html")
 
         lista_artigos_home = container_artigos.select(SELETOR_ITEM_ARTIGO)
-        print(f"Sucesso! {len(lista_artigos_home)} artigos encontrados na página principal.")
+        
+        if not lista_artigos_home:
+            print("AVISO: Nenhum artigo foi encontrado na página. O site pode ter bloqueado o acesso.")
+            print("Salvando screenshot e HTML para depuração...")
+            driver.save_screenshot('debug_screenshot.png')
+            with open('debug_page.html', 'w', encoding='utf-8') as f:
+                f.write(driver.page_source)
+            print("Arquivos de depuração salvos. O feed será gerado vazio.")
+        else:
+            print(f"Sucesso! {len(lista_artigos_home)} artigos encontrados na página principal.")
 
         for artigo_home in lista_artigos_home:
             link_absoluto = urljoin(URL_BASE, artigo_home.get('href', ''))
@@ -83,42 +113,46 @@ def gerar_feed_completo():
             })
 
         # --- ETAPA 2: Visitar cada artigo para buscar a data correta ---
-        print("\n--- Iniciando busca das datas de publicação individuais ---")
-        fuso_horario_sp = pytz.timezone('America/Sao_Paulo')
+        if artigos_coletados:
+            print("\n--- Iniciando busca das datas de publicação individuais ---")
+            fuso_horario_sp = pytz.timezone('America/Sao_Paulo')
 
-        for i, artigo in enumerate(artigos_coletados):
-            try:
-                print(f"  - {i+1}/{len(artigos_coletados)}: Visitando '{artigo['titulo']}'...")
-                driver.get(artigo['link'])
-                time.sleep(3) # Reduzido para 3s, deve ser suficiente
-                
-                html_artigo = driver.page_source
-                soup_artigo = BeautifulSoup(html_artigo, 'lxml')
-                
-                data_tag = soup_artigo.select_one(SELETOR_DATA_INTERNA)
-                if data_tag:
-                    texto_completo = data_tag.get_text(strip=True)
-                    match = re.search(r'(\d{2}/\d{2}/\d{4})\s*(\d{2}h\d{2})', texto_completo)
+            for i, artigo in enumerate(artigos_coletados):
+                try:
+                    print(f"  - {i+1}/{len(artigos_coletados)}: Visitando '{artigo['titulo']}'...")
+                    driver.get(artigo['link'])
                     
-                    if match:
-                        data_str = f"{match.group(1)} {match.group(2)}"
-                        data_string_limpa = data_str.replace('h', ':')
-                        formato_data = "%d/%m/%Y %H:%M"
+                    # Espera pela tag da data na página interna
+                    wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, SELETOR_DATA_INTERNA)))
+                    time.sleep(1) # Pequena pausa pós-carregamento
+                    
+                    html_artigo = driver.page_source
+                    soup_artigo = BeautifulSoup(html_artigo, 'lxml')
+                    
+                    data_tag = soup_artigo.select_one(SELETOR_DATA_INTERNA)
+                    if data_tag:
+                        texto_completo = data_tag.get_text(strip=True)
+                        match = re.search(r'(\d{2}/\d{2}/\d{4})\s*(\d{2}h\d{2})', texto_completo)
                         
-                        data_naive = datetime.datetime.strptime(data_string_limpa, formato_data)
-                        artigo['pubDate'] = fuso_horario_sp.localize(data_naive)
-                        print(f"      -> Data encontrada: {data_str}")
+                        if match:
+                            data_str = f"{match.group(1)} {match.group(2)}"
+                            data_string_limpa = data_str.replace('h', ':')
+                            formato_data = "%d/%m/%Y %H:%M"
+                            
+                            data_naive = datetime.datetime.strptime(data_string_limpa, formato_data)
+                            artigo['pubDate'] = fuso_horario_sp.localize(data_naive)
+                            print(f"      -> Data encontrada: {data_str}")
+                        else:
+                            print(f"      -> AVISO: Padrão de data não encontrado no texto: '{texto_completo}'")
+                            artigo['pubDate'] = fuso_horario_sp.localize(datetime.datetime(1970, 1, 1))
                     else:
-                        print(f"      -> AVISO: Padrão de data não encontrado no texto: '{texto_completo}'")
+                        print("      -> AVISO: Tag de data não encontrada.")
                         artigo['pubDate'] = fuso_horario_sp.localize(datetime.datetime(1970, 1, 1))
-                else:
-                    print("      -> AVISO: Tag de data não encontrada.")
-                    artigo['pubDate'] = fuso_horario_sp.localize(datetime.datetime(1970, 1, 1))
 
-            except Exception as e:
-                print(f"      -> ERRO ao processar data para {artigo['link']}: {e}")
-                artigo['pubDate'] = fuso_horario_sp.localize(datetime.datetime(1970, 1, 1))
-                continue
+                except Exception as e:
+                    print(f"      -> ERRO ao processar data para {artigo['link']}: {e}")
+                    artigo['pubDate'] = fuso_horario_sp.localize(datetime.datetime(1970, 1, 1))
+                    continue
 
     except Exception as e:
         print(f"\nERRO GERAL DURANTE A EXECUÇÃO: {e}")
@@ -127,15 +161,24 @@ def gerar_feed_completo():
             print("\nFechando o navegador...")
             try:
                 driver.quit()
-            except:
-                pass  # Ignora erros ao fechar o driver
+            except Exception as e:
+                print(f"Erro ignorado ao fechar o driver: {e}")
     
-    # ### CORREÇÃO FINAL: ORDENAÇÃO MANUAL ANTES DE GERAR O FEED ###
-    # Ordena a lista do mais novo para o mais velho.
+    # Se não houver artigos, não continue para a ordenação e geração do feed
+    if not artigos_coletados:
+        print("\nNenhum artigo foi coletado. O processo será encerrado sem gerar o feed.")
+        # Cria um feed vazio para não quebrar o workflow, se necessário
+        fg = FeedGenerator()
+        fg.title(FEED_TITULO)
+        fg.link(href=URL_BASE, rel='alternate')
+        fg.description(FEED_DESCRICAO)
+        fg.rss_file(NOME_ARQUIVO_RSS, pretty=True)
+        return
+
+    # --- ORDENAÇÃO MANUAL ANTES DE GERAR O FEED ---
     print("\nOrdenando artigos por data de publicação...")
     artigos_coletados.sort(key=lambda x: x['pubDate'], reverse=True)
     
-    # Debug: mostrar a ordem após classificação
     print("\nOrdem dos artigos após classificação (mais recente primeiro):")
     for i, artigo in enumerate(artigos_coletados):
         print(f"  {i+1}. {artigo['pubDate'].strftime('%d/%m/%Y %H:%M')} - {artigo['titulo']}")
@@ -148,16 +191,14 @@ def gerar_feed_completo():
     fg.description(FEED_DESCRICAO)
     fg.language('pt-BR')
 
-    # CORREÇÃO: Adicionar artigos em ordem reversa para compensar a inversão do FeedGenerator
-    # O FeedGenerator inverte a ordem dos itens no XML final, então adicionamos do mais antigo ao mais novo
-    print("Adicionando artigos ao feed (em ordem reversa para correção)...")
-    for artigo in reversed(artigos_coletados):  # reversed() aqui é a correção principal
-        fe = fg.add_entry()
+    print("Adicionando artigos ao feed...")
+    for artigo in artigos_coletados:
+        fe = fg.add_entry(order='append') # Usar order='append' para manter a ordem
         fe.id(artigo['link'])
         fe.title(artigo['titulo'])
         fe.link(href=artigo['link'])
         fe.description(artigo['descricao'])
-        fe.pubDate(artigo['pubDate']) 
+        fe.pubDate(artigo['pubDate'])
         
         if artigo['imagem_url']:
             fe.enclosure(url=artigo['imagem_url'], length='0', type='image/jpeg')
